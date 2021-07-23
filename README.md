@@ -1,6 +1,6 @@
 # Efficient Neural Causal Discovery without Acyclicity Constraints
 
-[Short paper](https://phlippe.github.io/media/ENCO_CausalUAI_Camera_Ready.pdf) | [Long paper](https://phlippe.github.io/media/ENCO_Preprint.pdf) | [Poster](https://phlippe.github.io/media/ENCO_Poster.pdf) | [Tutorial ![Open filled In Collab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/phlippe/ENCO/blob/main/walkthrough.ipynb) 
+[Short paper](https://phlippe.github.io/media/ENCO_CausalUAI_Camera_Ready.pdf) | [Long paper](https://arxiv.org/pdf/2107.10483.pdf) | [Poster](https://phlippe.github.io/media/ENCO_Poster.pdf) | [Tutorial ![Open filled In Collab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/phlippe/ENCO/blob/main/walkthrough.ipynb) 
 
 This is the official repository of the paper **Efficient Neural Causal Discovery without Acyclicity Constraints** by Phillip Lippe, Taco Cohen, and Efstratios Gavves. *Accepted to the [8th Causal Inference Workshop at UAI 2021](https://sites.google.com/uw.edu/causaluai2021/program?authuser=0) as Contributed Talk.*
 
@@ -83,7 +83,7 @@ If you use this code, please consider citing our work:
 @article{lippe2021ENCO,
   title={Efficient Neural Causal Discovery without Acyclicity Constraints},
   author={Lippe, Phillip and Cohen, Taco and Gavves, Efstratios},
-  journal={arXiv preprint arXiv:},
+  journal={arXiv preprint arXiv:2107.10483},
   year={2021}
 }
 ```
