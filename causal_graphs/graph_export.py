@@ -4,6 +4,7 @@ Used to setup benchmark datasets across all methods including baselines.
 """
 import os
 import numpy as np
+import random
 import sys
 sys.path.append("../")
 
@@ -12,7 +13,7 @@ from causal_graphs.graph_definition import CausalDAGDataset
 from causal_graphs.graph_generation import get_graph_func, generate_categorical_graph
 
 
-def export_graph(filename, graph, num_obs, num_int):
+def export_graph(filename, graph, num_obs, num_int, fixed_partial_interventions=False):
     """
     Takes a graph and samples 'num_obs' observational data points and 'num_int' interventional data points
     per variable. All those are saved in the file 'filename'
@@ -51,10 +52,17 @@ def export_graph(filename, graph, num_obs, num_int):
         data_int = data_int[:, :, graph.num_latents:]
         adj_matrix = adj_matrix[graph.num_latents:, graph.num_latents:]
         latents = latents - graph.num_latents  # Correcting indices
+    if fixed_partial_interventions:
+        exclude_inters = list(range(graph.num_vars))
+        random.shuffle(exclude_inters)
+        exclude_inters = np.array(exclude_inters)
+    else:
+        exclude_inters = np.array([], dtype=np.uint8)
     # Export and visualize
     np.savez_compressed(filename, data_obs=data_obs, data_int=data_int,
                         adj_matrix=adj_matrix,
-                        latents=latents)
+                        latents=latents,
+                        exclude_inters=exclude_inters)
     if graph.num_vars <= 100:
         for i, v in enumerate(graph.variables):
             v.name = r"$X_{%i}$" % (i+1)
@@ -91,7 +99,8 @@ def process_graphs(args):
             export_graph(filename=os.path.join(args.output_folder, name),
                          graph=graph,
                          num_obs=args.num_obs,
-                         num_int=args.num_int)
+                         num_int=args.num_int,
+                         fixed_partial_interventions=args.fixed_partial_interventions)
 
 
 def create_graph(num_vars, num_categs, edge_prob, graph_type, num_latents, deterministic, seed):
@@ -121,10 +130,11 @@ def load_graph(filename):
                Path of the file that should be loaded.
     """
     arr = np.load(filename)
-    graph = CausalDAGDataset(adj_matrix=arr["adj_matrix"],
-                             data_obs=arr["data_obs"].astype(np.int32),
-                             data_int=arr["data_int"].astype(np.int32),
-                             latents=arr["latents"] if "latents" in arr else None)
+    graph = CausalDAGDataset(adj_matrix=arr['adj_matrix'],
+                             data_obs=arr['data_obs'],
+                             data_int=arr['data_int'],
+                             latents=arr['latents'] if 'latents' in arr else None,
+                             exclude_inters=arr['exclude_inters'] if 'exclude_inters' in arr else None)
     return graph
 
 
@@ -145,9 +155,9 @@ if __name__ == '__main__':
                              'the seed is incremented along with the graph count.')
     parser.add_argument('--num_vars', type=int, default=25,
                         help='Number of variables that the graphs should have.')
-    parser.add_argument('--num_obs', type=int, default=100000,
+    parser.add_argument('--num_obs', type=int, default=5000,
                         help='Number of samples to use for the observational dataset.')
-    parser.add_argument('--num_int', type=int, default=10000,
+    parser.add_argument('--num_int', type=int, default=200,
                         help='Number of samples to use for the interventional dataset per variable.')
     parser.add_argument('--num_categs', type=int, default=10,
                         help='Number of categories/values that each variable can has.')
@@ -158,6 +168,10 @@ if __name__ == '__main__':
     parser.add_argument('--deterministic', action='store_true',
                         help='If True, all probability distributions become deterministic. Otherwise, we use '
                              'soft distributions with all values having a probability greater zero.')
+    parser.add_argument('--fixed_partial_interventions', action='store_true',
+                        help='If True, a random permutation of variables will be included as exclude_inters. '
+                             'Can be used to have the same subset of variables across methods/settings in '
+                             'partial intervention settings.')
 
     args = parser.parse_args()
     assert args.num_latents == 0 or args.graph_type == ["random"], \

@@ -87,7 +87,11 @@ class DistributionFitting(object):
         # Transpose for mask because adj[i,j] means that i->j
         mask_adj_matrices = adj_matrices.transpose(1, 2)
         preds = self.model(inputs, mask=mask_adj_matrices)
-        loss = self.loss_module(preds.flatten(0, -2), inputs.reshape(-1))
+
+        if inputs.dtype == torch.long:
+            loss = self.loss_module(preds.flatten(0,-2), inputs.reshape(-1))
+        else:  # If False, our input was continuous, and we return log likelihoods as preds
+            loss = preds.mean()
 
         loss.backward()
         self.optimizer.step()

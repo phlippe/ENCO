@@ -12,7 +12,7 @@ from causal_discovery.datasets import InterventionalDataset
 
 class GraphFitting(object):
 
-    def __init__(self, model, graph, num_batches, num_graphs, theta_only_num_graphs, batch_size, lambda_sparse, max_graph_stacking=200):
+    def __init__(self, model, graph, num_batches, num_graphs, theta_only_num_graphs, batch_size, lambda_sparse, sample_size_inters, max_graph_stacking=200, exclude_inters=None):
         """
         Creates a DistributionFitting object that summarizes all functionalities
         for performing the graph fitting stage of ENCO.
@@ -38,25 +38,41 @@ class GraphFitting(object):
                      Size of the batches to use in the gradient estimators.
         lambda_sparse : float
                         Sparsity regularizer value to use in the graph fitting stage.
+        sample_size_inters: Number of samples to use per intervention. If an exported graph is
+                            given as input and sample_size_inters is smaller than the exported
+                            interventional dataset, the first sample_size_inters samples will be taken.
         max_graph_stacking : int
                              Number of graphs that can maximally evaluated in parallel on the device.
                              If you run out of GPU memory, try to lower this number. It will then
                              evaluate the graph sequentially, which can be slightly slower but uses
                              less memory.
+        exclude_inters : list
+                         A list of variable indices that should be excluded from sampling interventions
+                         from. This should be used to apply ENCO on intervention sets on a subset of 
+                         the variable set. If None, an empty list will be assumed, i.e., interventions
+                         on all variables will be used.
         """
         self.model = model
         self.graph = graph
         self.num_batches = num_batches
         self.num_graphs = num_graphs
+        self.sample_size_inters = sample_size_inters
         self.batch_size = batch_size
         self.lambda_sparse = lambda_sparse
         self.max_graph_stacking = max_graph_stacking
         self.theta_only_num_graphs = theta_only_num_graphs
         self.inter_vars = []
-        if self.graph.num_vars >= 100 or hasattr(self.graph, "data_int"):
-            self.dataset = InterventionalDataset(self.graph,
-                                                 dataset_size=4096,
-                                                 batch_size=self.batch_size)
+        self.exclude_inters = exclude_inters if exclude_inters is not None else list()
+        self.theta_grad_mask = torch.zeros(self.graph.num_vars, self.graph.num_vars)
+        for v in self.exclude_inters:
+            self.theta_grad_mask[v, self.exclude_inters] = 1.0
+        self.dataset = InterventionalDataset(self.graph,
+                                             dataset_size=self.sample_size_inters,
+                                             batch_size=self.batch_size)
+        if len(self.exclude_inters) > 0:
+            print(f'Excluding interventions on the following {len(self.exclude_inters)}'
+                  f' out of {graph.num_vars} variables: '
+                  f'{", ".join([str(i) for i in sorted(self.exclude_inters)])}')
 
     def perform_update_step(self, gamma, theta, var_idx=-1, only_theta=False):
         """
@@ -131,6 +147,7 @@ class GraphFitting(object):
             # Pre-sampled data
             var_idx = self.sample_next_var_idx()
             int_sample = torch.cat([self.dataset.get_batch(var_idx) for _ in range(num_batches)], dim=0).to(device)
+            batch_size = int_sample.shape[0] // num_batches
         else:
             # If no dataset exists, data is newly sampled from the graph
             intervention_dict, var_idx = self.sample_intervention(self.graph,
@@ -139,7 +156,7 @@ class GraphFitting(object):
             int_sample = self.graph.sample(interventions=intervention_dict,
                                            batch_size=num_batches*batch_size,
                                            as_array=True)
-            int_sample = torch.from_numpy(int_sample).long().to(device)
+            int_sample = torch.from_numpy(int_sample).to(device)
 
         # Split number of graph samples acorss multiple iterations if not all can fit into memory
         num_graphs_list = [min(self.max_graph_stacking, num_graphs-i*self.max_graph_stacking)
@@ -226,12 +243,14 @@ class GraphFitting(object):
         gamma_grads[torch.arange(gamma_grads.shape[0]), torch.arange(gamma_grads.shape[1])] = 0.
 
         # Masking all theta's except the ones with a intervened variable
-        theta_grads[:var_idx] = 0.
-        theta_grads[var_idx+1:] = 0.
+        theta_zero_mask = self.theta_grad_mask.clone().to(theta_grads.device)
+        theta_zero_mask[var_idx] = 1.
+        theta_grads *= theta_zero_mask
         theta_grads -= theta_grads.transpose(0, 1)  # theta_ij = -theta_ji
 
         # Creating a mask which theta's are actually updated for the optimizer
-        theta_mask = torch.zeros_like(theta_grads)
+        # 0.1 multiplier reduces learning rate for variables without interventions
+        theta_mask = 0.1 * self.theta_grad_mask.clone().to(theta_grads.device)
         theta_mask[var_idx] = 1.
         theta_mask[:, var_idx] = 1.
         theta_mask[var_idx, var_idx] = 0.
@@ -244,7 +263,7 @@ class GraphFitting(object):
         in a shuffled order, like a standard dataset.
         """
         if len(self.inter_vars) == 0:  # If an epoch finished, reshuffle variables
-            self.inter_vars = [i for i in range(len(self.graph.variables))]
+            self.inter_vars = [i for i in range(len(self.graph.variables)) if i not in self.exclude_inters]
             random.shuffle(self.inter_vars)
         var_idx = self.inter_vars.pop()
         return var_idx
@@ -282,14 +301,17 @@ class GraphFitting(object):
         preds = self.model(int_sample, mask=mask_adj_matrix)
 
         # Evaluate negative log-likelihood of predictions
-        preds = preds.flatten(0, 1)
-        labels = int_sample.clone()
-        labels[:, var_idx] = -1  # Perfect interventions => no predictions of the intervened variable
-        labels = labels.reshape(-1)
-        nll = F.cross_entropy(preds, labels, reduction='none', ignore_index=-1)
-        nll = nll.reshape(*int_sample.shape)
-        self.model.train()
+        if int_sample.dtype == torch.long:
+            preds = preds.flatten(0, 1)
+            labels = int_sample.clone()
+            labels[:, var_idx] = -1  # Perfect interventions => no predictions of the intervened variable
+            labels = labels.reshape(-1)
+            nll = F.cross_entropy(preds, labels, reduction='none', ignore_index=-1)
+            nll = nll.reshape(*int_sample.shape)
+        else:
+            nll = preds
 
+        self.model.train()
         return nll
 
     def get_device(self):

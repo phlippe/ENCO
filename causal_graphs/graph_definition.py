@@ -13,7 +13,7 @@ import sys
 sys.path.append("../")
 
 from causal_graphs.graph_utils import adj_matrix_to_edges, edges_or_adj_matrix, sort_graph_by_vars, get_node_relations
-from causal_graphs.variable_distributions import ProbDist, ConstantDist, CategoricalDist, DiscreteProbDist
+from causal_graphs.variable_distributions import ProbDist, ConstantDist, CategoricalDist, DiscreteProbDist, ContinuousProbDist
 
 
 class CausalVariable(object):
@@ -64,7 +64,7 @@ class CausalVariable(object):
 
 class CausalDAG(object):
 
-    def __init__(self, variables, edges=None, adj_matrix=None, latents=None):
+    def __init__(self, variables, edges=None, adj_matrix=None, latents=None, exclude_inters=None):
         """
         Main class for summarizing all functionalities and parameters of a causal graph. Each 
         causal graph consists of a set of variables and a graph structure description.
@@ -84,6 +84,10 @@ class CausalDAG(object):
                   confounders are present, use None as input argument. Otherwise, the first
                   value in a row represents the variable index of the latent confounder, and
                   the consecutive two the indices of the two children.
+        exclude_inters : list
+                         A list of variable indices that should be excluded from sampling
+                         interventions from. This should be used to indicate that interventions
+                         have only been performed/are only possible on a subset of the variables.
         """
         super().__init__()
         assert len(set([v.name for v in variables])) == len(
@@ -97,12 +101,14 @@ class CausalDAG(object):
         self.name_to_var = {v.name: v for v in variables}
         self._sort_variables()
         self.node_relations = get_node_relations(self.adj_matrix)
+        self.is_categorical = isinstance(variables[0].prob_dist, DiscreteProbDist)
+        self.exclude_inters = exclude_inters
 
     def _sort_variables(self):
         """
         Sorts the variables in the graph for ancestral sampling.
         """
-        self.variables, self.edges, self.adj_matrix, self.latents, _ = sort_graph_by_vars(
+        self.variables, self.edges, self.adj_matrix, self.latents, self.sorted_idxs = sort_graph_by_vars(
             self.variables, self.edges, self.adj_matrix, self.latents)
 
     def sample(self, interventions=None, batch_size=1, as_array=False):
@@ -229,16 +235,29 @@ class CausalDAG(object):
 
 class CausalDAGDataset(CausalDAG):
 
-    def __init__(self, adj_matrix, data_obs, data_int, latents=None):
+    def __init__(self, adj_matrix, data_obs, data_int, latents=None, exclude_inters=None):
         """
         A CausalDAG but with existing pre-sampled data and unknown conditional distributions.
         """
-        num_categs = data_obs.max(axis=-1)
-        variables = [CausalVariable(r"$X_{%i}$" % (i+1), CategoricalDist(num_categs[i]+1, None))
-                     for i in range(adj_matrix.shape[0])]
+        if data_obs.dtype in [np.uint8, np.int16]:
+            data_obs = data_obs.astype(np.int32)
+        if data_int.dtype in [np.uint8, np.int16]:
+            data_int = data_int.astype(np.int32)
+
+        if data_obs.dtype == np.int32:
+            num_categs = data_obs.max(axis=-1)
+            new_dist = lambda i : CategoricalDist(num_categs[i]+1, None)
+        elif data_obs.dtype == np.float32:
+            new_dist = lambda i : ContinuousProbDist()
+        else:
+            new_dist = lambda i : None
+            
+        variables = [CausalVariable(r"$X_{%i}$" % (i+1), new_dist(i)) for i in range(adj_matrix.shape[0])]
         super().__init__(variables=variables, adj_matrix=adj_matrix, latents=latents)
-        self.data_obs = data_obs  # Observational dataset, shape [num_samples, num_vars]
-        self.data_int = data_int  # Interventional dataset, shape [num_vars, num_samples, num_vars]. First dim is the intervened variable.
+        self.data_obs = data_obs[:,self.sorted_idxs]  # Observational dataset, shape [num_samples, num_vars]
+        self.data_int = data_int[self.sorted_idxs][...,self.sorted_idxs]  # Interventional dataset, shape [num_vars, num_samples, num_vars]. First dim is the intervened variable.
+        self.is_categorical = (self.data_obs.dtype == np.int32)
+        self.exclude_inters = exclude_inters
 
     def sample(self, *args, **kwargs):
         raise Exception('You cannot generate new examples from a Causal-DAG dataset. '

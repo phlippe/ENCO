@@ -119,7 +119,7 @@ class MultivarLinear(nn.Module):
 
 class InputMask(nn.Module):
 
-    def __init__(self, input_mask):
+    def __init__(self, input_mask, concat_mask=False):
         """
         Module for handling to mask the input. Needed to simulate different parent sets.
 
@@ -128,12 +128,16 @@ class InputMask(nn.Module):
         input_mask : torch.Tensor/None
                      If a tensor, it is assumed to be a fixed mask for all forward passes.
                      If None, it is required to pass the mask during every forward pass.
+        concat_mask : bool
+                      If True, the mask will additionally be concatenated with the input.
+                      Recommended for inputs where zero is a valid value
         """
         super().__init__()
         if isinstance(input_mask, torch.Tensor):
             self.register_buffer('input_mask', input_mask.float(), persistent=False)
         else:
             self.input_mask = input_mask
+        self.concat_mask = concat_mask
 
     def forward(self, x, mask=None, mask_val=0):
         """
@@ -165,6 +169,8 @@ class InputMask(nn.Module):
             x = x * mask + (1 - mask) * mask_val
         else:
             x = x * mask
+        if self.concat_mask:
+            x = torch.cat([x, mask.expand_as(x)], dim=-1)
         return x
 
 

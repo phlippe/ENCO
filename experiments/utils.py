@@ -43,6 +43,9 @@ def get_basic_parser():
                         help='Batch size to use for distribution and graph fitting.')
     parser.add_argument('--hidden_size', type=int, default=64,
                         help='Hidden size of the distribution fitting NNs.')
+    parser.add_argument('--use_flow_model', action='store_true',
+                        help='If True, a Deep Sigmoidal Flow will be used as model if'
+                             ' the graph contains continuous data.')
     parser.add_argument('--model_iters', type=int, default=1000,
                         help='Number of updates per distribution fitting stage.')
     parser.add_argument('--graph_iters', type=int, default=100,
@@ -55,6 +58,8 @@ def get_basic_parser():
                         help='Learning rate of gamma parameters in graph fitting.')
     parser.add_argument('--lr_theta', type=float, default=1e-1,
                         help='Learning rate of theta parameters in graph fitting.')
+    parser.add_argument('--weight_decay', type=float, default=0.0,
+                        help='Weight decay to use during distribution fitting.')
     parser.add_argument('--checkpoint_dir', type=str, default=None,
                         help='Directory to save experiment log to. If None, one will'
                              ' be created based on the current time')
@@ -76,6 +81,17 @@ def get_basic_parser():
     parser.add_argument('--stop_early', action='store_true',
                         help='If True, ENCO stops running if it achieved perfect reconstruction in'
                              ' all of the last 5 epochs.')
+    parser.add_argument('--sample_size_obs', type=int, default=5000,
+                        help='Dataset size to use for observational data. If an exported graph is'
+                             ' given as input and sample_size_obs is smaller than the exported'
+                             ' observational dataset, the first sample_size_obs samples will be taken.')
+    parser.add_argument('--sample_size_inters', type=int, default=200,
+                        help='Number of samples to use per intervention. If an exported graph is'
+                             ' given as input and sample_size_inters is smaller than the exported'
+                             ' interventional dataset, the first sample_size_inters samples will be taken.')
+    parser.add_argument('--max_inters', type=int, default=-1,
+                        help='Number of variables to provide interventional data for. If smaller'
+                             ' than zero, interventions on all variables will be used.')
     return parser
 
 
@@ -98,10 +114,24 @@ def test_graph(graph, args, checkpoint_dir, file_id):
               log filenames, and identify the graph among other experiments in
               the same checkpoint directory.
     """
+    # Determine variables to exclude from the intervention set
+    if args.max_inters < 0:
+        graph.exclude_inters = None
+    elif graph.exclude_inters is not None:
+        graph.exclude_inters = graph.exclude_inters[:-args.max_inters]
+    else:
+        exclude_inters = list(range(graph.num_vars))
+        random.seed(args.seed)
+        random.shuffle(exclude_inters)
+        exclude_inters = exclude_inters[:-args.max_inters]
+        graph.exclude_inters = exclude_inters
+
     # Execute ENCO on graph
     discovery_module = ENCO(graph=graph,
                             hidden_dims=[args.hidden_size],
+                            use_flow_model=args.use_flow_model,
                             lr_model=args.lr_model,
+                            weight_decay=args.weight_decay,
                             lr_gamma=args.lr_gamma,
                             lr_theta=args.lr_theta,
                             model_iters=args.model_iters,
@@ -114,6 +144,8 @@ def test_graph(graph, args, checkpoint_dir, file_id):
                             theta_only_num_graphs=args.theta_only_num_graphs,
                             theta_only_iters=args.theta_only_iters,
                             max_graph_stacking=args.max_graph_stacking,
+                            sample_size_obs=args.sample_size_obs,
+                            sample_size_inters=args.sample_size_inters
                             )
     discovery_module.to(get_device())
     start_time = time.time()
@@ -126,6 +158,14 @@ def test_graph(graph, args, checkpoint_dir, file_id):
     metrics = discovery_module.get_metrics()
     with open(os.path.join(checkpoint_dir, "metrics_%s.json" % file_id), "w") as f:
         json.dump(metrics, f, indent=4)
+    print('-'*50 + '\nFinal metrics:')
+    discovery_module.print_graph_statistics(m=metrics)
+    if graph.num_vars < 100:
+        metrics_acyclic = discovery_module.get_metrics(enforce_acyclic_graph=True)
+        with open(os.path.join(checkpoint_dir, "metrics_acyclic_%s.json" % file_id), "w") as f:
+            json.dump(metrics_acyclic, f, indent=4)
+        print('-'*50 + '\nFinal metrics (acyclic):')
+        discovery_module.print_graph_statistics(m=metrics_acyclic)
     with open(os.path.join(checkpoint_dir, "metrics_full_log_%s.json" % file_id), "w") as f:
         json.dump(discovery_module.metric_log, f, indent=4)
 
@@ -133,6 +173,10 @@ def test_graph(graph, args, checkpoint_dir, file_id):
     binary_matrix = discovery_module.get_binary_adjmatrix().detach().cpu().numpy()
     np.save(os.path.join(checkpoint_dir, 'binary_matrix_%s.npy' % file_id),
             binary_matrix.astype(np.bool))
+    if graph.num_vars < 100:
+        acyclic_matrix = discovery_module.get_acyclic_adjmatrix().detach().numpy()
+        np.save(os.path.join(checkpoint_dir, 'binary_acyclic_matrix_%s.npy' % file_id),
+                acyclic_matrix.astype(np.bool))
 
     # Visualize predicted graphs. For large graphs, visualizing them do not really help
     if graph.num_vars < 40:
@@ -147,7 +191,7 @@ def test_graph(graph, args, checkpoint_dir, file_id):
 
     # Save parameters and model if wanted
     state_dict = discovery_module.get_state_dict()
-    if not args.save_model:
+    if not args.save_model:  # The model can be expensive in memory
         _ = state_dict.pop("model")
     torch.save(state_dict,
                os.path.join(checkpoint_dir, "state_dict_%s.tar" % file_id))

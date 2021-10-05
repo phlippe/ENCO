@@ -69,12 +69,12 @@ class AdamTheta(OptimizerTemplate):
         if self.params.grad is None:
             return
 
-        self.param_step.add_(mask)
+        self.param_step.add_((mask > 0.0).float())
 
         new_momentum = (1 - self.beta1) * self.params.grad + self.beta1 * self.param_momentum
         new_2nd_momentum = (1 - self.beta2) * (self.params.grad)**2 + self.beta2 * self.param_2nd_momentum
-        self.param_momentum = torch.where(mask == 1.0, new_momentum, self.param_momentum)
-        self.param_2nd_momentum = torch.where(mask == 1.0, new_2nd_momentum, self.param_2nd_momentum)
+        self.param_momentum = torch.where(mask > 0.0, new_momentum, self.param_momentum)
+        self.param_2nd_momentum = torch.where(mask > 0.0, new_2nd_momentum, self.param_2nd_momentum)
 
         bias_correction_1 = 1 - self.beta1 ** self.param_step
         bias_correction_2 = 1 - self.beta2 ** self.param_step

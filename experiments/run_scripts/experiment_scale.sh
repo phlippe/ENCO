@@ -12,6 +12,8 @@ python run_generated_graphs.py --cluster \
                                --model_iters 2000 \
                                --use_theta_only_stage \
                                --theta_only_iters 1000 \
+                               --sample_size_obs 100000 \
+                               --sample_size_inters 4096 \
                                --seed 42
 # Graph with 200 variables
 python run_generated_graphs.py --cluster \
@@ -23,6 +25,8 @@ python run_generated_graphs.py --cluster \
                                --model_iters 2000 \
                                --use_theta_only_stage \
                                --theta_only_iters 1000 \
+                               --sample_size_obs 100000 \
+                               --sample_size_inters 4096 \
                                --seed 42
 # Graph with 400 variables
 python run_generated_graphs.py --cluster \
@@ -34,6 +38,8 @@ python run_generated_graphs.py --cluster \
                                --model_iters 4000 \
                                --use_theta_only_stage \
                                --theta_only_iters 2000 \
+                               --sample_size_obs 100000 \
+                               --sample_size_inters 4096 \
                                --seed 42
 # Graph with 1000 variables
 python run_generated_graphs.py --cluster \
@@ -47,4 +53,6 @@ python run_generated_graphs.py --cluster \
                                --model_iters 4000 \
                                --use_theta_only_stage \
                                --theta_only_iters 2000 \
+                               --sample_size_obs 100000 \
+                               --sample_size_inters 4096 \
                                --seed 42

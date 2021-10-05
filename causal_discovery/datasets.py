@@ -20,7 +20,9 @@ class ObservationalCategoricalData(data.Dataset):
                 Otherwise, a new dataset is sampled.
         dataset_size : int
                        The size of the dataset to sample if no observational dataset
-                       is provided in the first place.
+                       is provided in the first place. Otherwise, the minimum of
+                       the exported dataset size and the requested dataset size
+                       is used.
         """
         super().__init__()
         self.graph = graph
@@ -32,7 +34,14 @@ class ObservationalCategoricalData(data.Dataset):
             print("Dataset created in %4.2fs" % (time.time() - start_time))
         else:
             data = self.graph.data_obs
-        self.data = torch.from_numpy(data).long()
+            if dataset_size <= data.shape[0]:
+                data = data[:dataset_size]
+            else:
+                print('[WARNING - ObservationalCategoricalData] The requested dataset size is'
+                      f' {dataset_size} but the exported graph\'s observational dataset has only'
+                      f' {data.shape[0]} samples. Using {data.shape[0]} samples...')
+        data = torch.from_numpy(data)
+        self.data = correct_data_types(data)
 
     def __len__(self):
         return self.data.shape[0]
@@ -61,6 +70,8 @@ class InterventionalDataset(object):
         dataset_size : int
                        Number of samples per variable to sample if no
                        interventional dataset is provided in the first place.
+                       Otherwise, the minimum of the exported dataset size 
+                       and the requested dataset size is used.
         batch_size : int
                      Number of samples in a batch that is returned via the 
                      'get_batch' function.
@@ -78,6 +89,11 @@ class InterventionalDataset(object):
         self.data_iter = {}
 
         if hasattr(self.graph, "data_int"):
+            if self.graph.data_int.shape[1] < self.dataset_size:
+                print('[WARNING - InterventionalDataset] The requested dataset size is'
+                      f' {self.dataset_size} but the exported graph\'s interventional'
+                      f' dataset has only {self.graph.data_int.shape[1]} samples.'
+                      f' Using {self.graph.data_int.shape[1]} samples...')
             for var_idx in range(self.graph.num_vars):
                 self._add_dataset(self.graph.data_int[var_idx], var_idx)
         else:
@@ -110,7 +126,7 @@ class InterventionalDataset(object):
         int_sample = self.graph.sample(interventions=intervention_dict,
                                        batch_size=self.dataset_size*num_vars,
                                        as_array=True)
-        int_sample = torch.from_numpy(int_sample).long().reshape(num_vars, self.dataset_size, int_sample.shape[-1])
+        int_sample = torch.from_numpy(int_sample).reshape(num_vars, self.dataset_size, int_sample.shape[-1])
         for i, (var_idx, var, values) in enumerate(intervention_list):
             self._add_dataset(int_sample[i], var_idx)
 
@@ -119,10 +135,14 @@ class InterventionalDataset(object):
         Helper function for sampling interventional dataset
         """
         if isinstance(samples, np.ndarray):
-            samples = torch.from_numpy(samples).long()
+            samples = torch.from_numpy(samples)
+        samples = correct_data_types(samples)
+        if self.dataset_size <= samples.shape[0]:
+            samples = samples[:self.dataset_size]
         dataset = data.TensorDataset(samples)
         self.data_loaders[var_idx] = data.DataLoader(dataset, batch_size=self.batch_size,
-                                                     shuffle=True, pin_memory=False, drop_last=True)
+                                                     shuffle=True, pin_memory=False, 
+                                                     drop_last=(len(dataset)>self.batch_size))
         self.data_iter[var_idx] = iter(self.data_loaders[var_idx])
 
     def get_batch(self, var_idx):
@@ -135,3 +155,11 @@ class InterventionalDataset(object):
             self.data_iter[var_idx] = iter(self.data_loaders[var_idx])
             batch = next(self.data_iter[var_idx])
         return batch[0]
+
+
+def correct_data_types(data):
+    if data.dtype in [torch.uint8, torch.int16, torch.int32]:
+        data = data.long()
+    elif data.dtype in [torch.float16, torch.float64]:
+        data = data.float()
+    return data

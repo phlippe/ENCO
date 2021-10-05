@@ -323,7 +323,6 @@ class NNCateg(object):
         obj.net.load_state_dict(state_dict["net"])
         return obj
 
-
 def multinomial_batch(p):
     # Effient batch-scale sampling in numpy
     u = np.random.uniform(size=p.shape[:-1]+(1,))
@@ -332,6 +331,19 @@ def multinomial_batch(p):
     diff[diff < 0] = 2  # Set negatives to any number larger than 1
     samples = np.argmin(diff, axis=-1)
     return samples
+
+
+######################
+## CONTINUOUS PROBS ##
+######################
+
+class ContinuousProbDist(ProbDist):
+
+    def __init__(self):
+        """
+        Template class for continuous probability distributions.
+        """
+        super().__init__()
 
 
 #####################

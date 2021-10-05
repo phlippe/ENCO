@@ -134,5 +134,7 @@ experiments/checkpoints/
 # Datasets
 causal_graphs/real_data/
 causal_graphs/synthetic_graphs/
+causal_graphs/synthetic_graphs_partial/
 causal_graphs/confounder_graphs/
+causal_graphs/continuous_graphs/
 causal_graphs/exported_graphs.zip

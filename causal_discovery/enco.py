@@ -7,8 +7,9 @@ import sys
 sys.path.append("../")
 
 from causal_discovery.distribution_fitting import DistributionFitting
-from causal_discovery.utils import track
+from causal_discovery.utils import track, find_best_acyclic_graph
 from causal_discovery.multivariable_mlp import create_model
+from causal_discovery.multivariable_flow import create_continuous_model
 from causal_discovery.graph_fitting import GraphFitting
 from causal_discovery.datasets import ObservationalCategoricalData
 from causal_discovery.optimizers import AdamTheta, AdamGamma
@@ -19,8 +20,10 @@ class ENCO(object):
     def __init__(self, 
                  graph,
                  hidden_dims=[64],
+                 use_flow_model=False,
                  lr_model=5e-3,
                  betas_model=(0.9, 0.999),
+                 weight_decay=0.0,
                  lr_gamma=2e-2,
                  betas_gamma=(0.9, 0.9),
                  lr_theta=1e-1,
@@ -31,12 +34,13 @@ class ENCO(object):
                  GF_num_batches=1,
                  GF_num_graphs=100,
                  lambda_sparse=0.004,
-                 dataset_size=100000,
                  latent_threshold=0.35,
                  use_theta_only_stage=False,
                  theta_only_num_graphs=4,
                  theta_only_iters=1000,
-                 max_graph_stacking=200):
+                 max_graph_stacking=200,
+                 sample_size_obs=5000,
+                 sample_size_inters=200):
         """
         Creates ENCO object for performing causal structure learning.
 
@@ -51,6 +55,8 @@ class ENCO(object):
                    Learning rate to use in distribution fitting stage for the neural networks.
         betas_model : tuple (float, float)
                       Beta values to use for the model's Adam optimizer.
+        weight_decay : float
+                       Weight decay to use in the model optimizer during the graph fitting stage.
         lr_gamma : float
                    Learning rate to use in the graph fitting stage for the gamma parameters.
         betas_gamma : tuple (float, float)
@@ -74,9 +80,6 @@ class ENCO(object):
                         graph fitting stage. Usually in the range 20-100.
         lambda_sparse : float
                         Sparsity regularizer value to use in the graph fitting stage.
-        dataset_size : int
-                       Number of observational data points to sample if no pre-sampled dataset
-                       is provided in the graph object.
         latent_threshold : float
                            Threshold to use for latent confounder detection. Correspond to the
                            hyperparameter tau in the paper.
@@ -97,20 +100,39 @@ class ENCO(object):
                              during the graph fitting stage. If you run out of GPU memory, try to 
                              lower this number. The graphs will then be evaluated in sequence, which 
                              can be slightly slower but uses less memory.
+        sample_size_obs: int
+                         Dataset size to use for observational data. If an exported graph is
+                         given as input and sample_size_obs is smaller than the exported
+                         observational dataset, the first sample_size_obs samples will be taken.
+        sample_size_inters: Number of samples to use per intervention. If an exported graph is
+                            given as input and sample_size_inters is smaller than the exported
+                            interventional dataset, the first sample_size_inters samples will be taken.
+        exclude_inters : list
+                         A list of variable indices that should be excluded from sampling interventions
+                         from. This should be used to apply ENCO on intervention sets on a subset of 
+                         the variable set. If None, an empty list will be assumed, i.e., interventions
+                         on all variables will be used.
         """
         self.graph = graph
         self.num_vars = graph.num_vars
-        num_categs = max([v.prob_dist.num_categs for v in graph.variables])
         # Create observational dataset
-        obs_dataset = ObservationalCategoricalData(graph, dataset_size=dataset_size)
+        obs_dataset = ObservationalCategoricalData(graph, dataset_size=sample_size_obs)
         obs_data_loader = data.DataLoader(obs_dataset, batch_size=batch_size,
                                           shuffle=True, drop_last=True)
         # Create neural networks for fitting the conditional distributions
-        model = create_model(num_vars=self.num_vars,
-                             num_categs=num_categs,
-                             hidden_dims=hidden_dims)
-        print("Distribution fitting model:\n" + str(model))
-        model_optimizer = torch.optim.Adam(model.parameters(), lr=lr_model, betas=betas_model)
+        if graph.is_categorical:
+            num_categs = max([v.prob_dist.num_categs for v in graph.variables])
+            model = create_model(num_vars=self.num_vars,
+                                 num_categs=num_categs,
+                                 hidden_dims=hidden_dims)
+        else:
+            model = create_continuous_model(num_vars=self.num_vars,
+                                            hidden_dims=hidden_dims,
+                                            use_flow_model=use_flow_model)
+        model_optimizer = torch.optim.Adam(model.parameters(),
+                                           lr=lr_model,
+                                           betas=betas_model,
+                                           weight_decay=weight_decay)
         # Initialize graph parameters
         self.init_graph_params(self.num_vars, lr_gamma, betas_gamma, lr_theta, betas_theta)
         # Initialize distribution and graph fitting modules
@@ -124,7 +146,9 @@ class ENCO(object):
                                                  theta_only_num_graphs=theta_only_num_graphs,
                                                  batch_size=batch_size,
                                                  lambda_sparse=lambda_sparse,
-                                                 max_graph_stacking=max_graph_stacking)
+                                                 max_graph_stacking=max_graph_stacking,
+                                                 sample_size_inters=sample_size_inters,
+                                                 exclude_inters=self.graph.exclude_inters)
         # Save other hyperparameters
         self.model_iters = model_iters
         self.graph_iters = graph_iters
@@ -136,6 +160,10 @@ class ENCO(object):
         self.metric_log = []
         self.iter_time = -1
         self.dist_fit_time = -1
+
+        # Some debugging info for user
+        print(f'Distribution fitting model:\n{str(model)}')
+        print(f'Dataset size:\n- Observational: {len(obs_dataset)}\n- Interventional: {sample_size_inters}')
 
     def init_graph_params(self, num_vars, lr_gamma, betas_gamma, lr_theta, betas_theta):
         """
@@ -217,11 +245,22 @@ class ENCO(object):
         """
         Returns the predicted, binary adjacency matrix of the causal graph.
         """
-        A = (self.gamma > 0.0) * (self.theta > 0.0)
+        binary_gamma = self.gamma > 0.0
+        binary_theta = self.theta > 0.0
+        A = binary_gamma * binary_theta
         # If we consider latent confounders, we mask all edges that have a confounder score greater than the threshold
         if self.graph.num_latents > 0:
             A = A * (self.get_confounder_scores() < self.latent_threshold)
+            
         return (A == 1).cpu()
+
+    def get_acyclic_adjmatrix(self):
+        """
+        Returns the predicted, acyclic adjacency matrix of the causal graph.
+        """
+        A = find_best_acyclic_graph(gamma=torch.sigmoid(self.gamma), 
+                                    theta=torch.sigmoid(self.theta))
+        return A.cpu()
 
     def is_prediction_correct(self):
         """
@@ -248,12 +287,13 @@ class ENCO(object):
         return l_score
 
     @torch.no_grad()
-    def print_graph_statistics(self, epoch=-1, log_metrics=False):
+    def print_graph_statistics(self, epoch=-1, log_metrics=False, m=None):
         """
         Prints statistics and metrics of the current graph prediction. It is executed
         during training to track the training progress.
         """
-        m = self.get_metrics()
+        if m is None:
+            m = self.get_metrics()
         if log_metrics:
             if epoch > 0:
                 m["epoch"] = epoch
@@ -267,39 +307,43 @@ class ENCO(object):
         print("Theta - Orientation accuracy: %4.2f%% (TP=%i,FN=%i)" %
               (m["orient"]["acc"] * 100.0, m["orient"]["TP"], m["orient"]["FN"]))
 
-        if self.graph.num_latents > 0:
+        if self.graph.num_latents > 0 and "confounders" in m:
             print("Latent confounders - TP=%i,FP=%i,FN=%i,TN=%i" %
                   (m["confounders"]["TP"], m["confounders"]["FP"], m["confounders"]["FN"], m["confounders"]["TN"]))
 
-        if self.num_vars >= 100:  # For large graphs, we print runtime statistics for better time estimates
+        if epoch > 0 and self.num_vars >= 100:  # For large graphs, we print runtime statistics for better time estimates
             print("-> Iteration time: %imin %is" % (int(self.iter_time)//60, int(self.iter_time) % 60))
             print("-> Fitting time: %imin %is" % (int(self.dist_fit_time)//60, int(self.dist_fit_time) % 60))
             gpu_mem = torch.cuda.max_memory_allocated(device="cuda:0")/1.0e9 if torch.cuda.is_available() else -1
             print("-> Used GPU memory: %4.2fGB" % (gpu_mem))
 
     @torch.no_grad()
-    def get_metrics(self):
+    def get_metrics(self, enforce_acyclic_graph=False):
         """
         Returns a dictionary with detailed metrics comparing the current prediction to the ground truth graph.
         """
         # Standard metrics (TP,TN,FP,FN) for edge prediction
-        binary_gamma = self.get_binary_adjmatrix()
-        false_positives = torch.logical_and(binary_gamma, ~self.true_adj_matrix)
-        false_negatives = torch.logical_and(~binary_gamma, self.true_adj_matrix)
-        TP = torch.logical_and(binary_gamma, self.true_adj_matrix).float().sum().item()
-        TN = torch.logical_and(~binary_gamma, ~self.true_adj_matrix).float().sum().item()
+        binary_matrix = self.get_binary_adjmatrix()
+        if enforce_acyclic_graph:
+            binary_matrix = self.get_acyclic_adjmatrix()
+        else:
+            binary_matrix = self.get_binary_adjmatrix()
+        false_positives = torch.logical_and(binary_matrix, ~self.true_adj_matrix)
+        false_negatives = torch.logical_and(~binary_matrix, self.true_adj_matrix)
+        TP = torch.logical_and(binary_matrix, self.true_adj_matrix).float().sum().item()
+        TN = torch.logical_and(~binary_matrix, ~self.true_adj_matrix).float().sum().item()
         FP = false_positives.float().sum().item()
         FN = false_negatives.float().sum().item()
         TN = TN - self.gamma.shape[-1]  # Remove diagonal as those are not being predicted
         recall = TP / max(TP + FN, 1e-5)
         precision = TP / max(TP + FP, 1e-5)
         # Structural Hamming Distance score
-        rev = torch.logical_and(binary_gamma, self.true_adj_matrix.T)
+        rev = torch.logical_and(binary_matrix, self.true_adj_matrix.T)
         num_revs = rev.float().sum().item()
         SHD = (false_positives + false_negatives + rev + rev.T).float().sum().item() - num_revs
 
         # Get details on False Positives (what relations have the nodes of the false positives?)
-        FP_elems = torch.where(torch.logical_and(binary_gamma, ~self.true_adj_matrix))
+        FP_elems = torch.where(torch.logical_and(binary_matrix, ~self.true_adj_matrix))
         FP_relations = self.true_node_relations[FP_elems]
         FP_dict = {
             "ancestors": (FP_relations == -1).sum().item(),  # i->j => j is a child of i
@@ -332,7 +376,7 @@ class ENCO(object):
             "orient": orient_dict
         }
 
-        if self.graph.num_latents > 0:
+        if self.graph.num_latents > 0 and not enforce_acyclic_graph:
             metrics["confounders"] = self.get_confounder_metrics()
         return metrics
 
