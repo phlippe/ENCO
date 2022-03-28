@@ -246,7 +246,7 @@ class GraphFitting(object):
         theta_zero_mask = self.theta_grad_mask.clone().to(theta_grads.device)
         theta_zero_mask[var_idx] = 1.
         theta_grads *= theta_zero_mask
-        theta_grads -= theta_grads.transpose(0, 1)  # theta_ij = -theta_ji
+        theta_grads = theta_grads - theta_grads.transpose(0, 1)  # theta_ij = -theta_ji
 
         # Creating a mask which theta's are actually updated for the optimizer
         # 0.1 multiplier reduces learning rate for variables without interventions
