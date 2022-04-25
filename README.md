@@ -113,10 +113,11 @@ Both data types are supported in this repository. Simply make sure that the nump
 ## Citation
 If you use this code, please consider citing our work:
 ```bibtex
-@article{lippe2021ENCO,
-  title={Efficient Neural Causal Discovery without Acyclicity Constraints},
-  author={Lippe, Phillip and Cohen, Taco and Gavves, Efstratios},
-  journal={arXiv preprint arXiv:2107.10483},
-  year={2021}
+@inproceedings{lippe2022enco,
+ author = {Lippe, Phillip and Cohen, Taco and Gavves, Efstratios},
+ booktitle = {International Conference on Learning Representations},
+ title = {Efficient Neural Causal Discovery without Acyclicity Constraints},
+ url = {https://openreview.net/forum?id=eYciPrLuUhG},
+ year = {2022}
 }
 ```
