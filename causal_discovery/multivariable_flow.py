@@ -255,7 +255,7 @@ class GaussianNoiseModel(nn.Module):
 
     def forward(self, x, mask):
         y = self.condition_mlp(x, mask)
-        nll = - log_normal(x, y[...,0], torch.exp(y[...,1]))
+        nll = - log_normal(x, y[...,0], y[...,1])
         return nll
 
     @property
