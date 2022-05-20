@@ -2,7 +2,7 @@
 
 [Short paper](https://phlippe.github.io/media/ENCO_CausalUAI_Camera_Ready.pdf) | [Long paper](https://arxiv.org/pdf/2107.10483.pdf) | [Poster](https://phlippe.github.io/media/ENCO_Poster.pdf) | [Tutorial ![Open filled In Collab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/phlippe/ENCO/blob/main/walkthrough.ipynb) 
 
-This is the official repository of the paper **Efficient Neural Causal Discovery without Acyclicity Constraints** by Phillip Lippe, Taco Cohen, and Efstratios Gavves. *Accepted to the [8th Causal Inference Workshop at UAI 2021](https://sites.google.com/uw.edu/causaluai2021/program?authuser=0) as Contributed Talk.*
+This is the official repository of the paper **Efficient Neural Causal Discovery without Acyclicity Constraints** by Phillip Lippe, Taco Cohen, and Efstratios Gavves. *Presented at the International Conference on Learning Representations (ICLR), 2022.*
 
 ## Paper summary
 
